@@ -155,24 +155,23 @@ unsigned char *I2OSP(int x, int xLen) {
 
     return os;
 }
-unsigned char *MGF(unsigned char *mgfSeed, unsigned int l, int sha2_ndx) {
+void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
+         int sha2_ndx) {
     unsigned long hlen = findSHA[sha2_ndx];
-    if (l > (hlen << 32)) return NULL;
+    if (l > (hlen << 32)) return;
     unsigned long max = l / hlen;
     if (l % hlen) max++;
-    unsigned char *T = malloc(hlen * max);
-    for (unsigned long i = 0; i < max && strlen(T) < l; i++) {
+    for (unsigned long i = 0; i < max && strlen(dest) < l; i++) {
         unsigned char *C = (unsigned char *)malloc(strlen(mgfSeed) + 4);
         strcat(C, mgfSeed);
         strcat(C, I2OSP(i, 4));
         unsigned char *val =
             (unsigned char *)malloc(hlen * sizeof(unsigned char));
         hash(C, strlen(C), val, sha2_ndx);
-        strcat(T, val);
+        strcat(dest, val);
         free(C);
         free(val);
     }
-    return T;
 }
 
 /*
@@ -183,14 +182,14 @@ unsigned char *MGF(unsigned char *mgfSeed, unsigned int l, int sha2_ndx) {
  * SHA512_224, SHA512_256 중에서 선택한다. c의 크기는 RSAKEYSIZE와 같아야 한다.
  * 성공하면 0, 그렇지 않으면 오류 코드를 넘겨준다.
  */
-int rsaes_oaep_encrypt(const void *msg, size_t mLen, const void *label,
+int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
                        const void *e, const void *n, void *c, int sha2_ndx) {
     int k = RSAKEYSIZE / 8;        // RSA modulus size in bytes
     int hlen = findSHA[sha2_ndx];  // Length of the hash function output
 
     // check to label length (step 1 - a)
     // message length is too long (step 1 - b)
-    if (*mLen > k - 2 * hlen - 2) {
+    if (mLen > k - 2 * hlen - 2) {
         return PKCS_MSG_TOO_LONG;
     }
 
@@ -206,7 +205,7 @@ int rsaes_oaep_encrypt(const void *msg, size_t mLen, const void *label,
     /////////////////////////////////////////////////////////
 
     // Generate a padding string PS (step 2 - b)
-    int padding_size = k - *mLen - 2 * hlen - 2;
+    int padding_size = k - mLen - 2 * hlen - 2;
 
     // a data block DB of length k - hlen - 1 octets (step c)
     int DBlength = k - hlen - 1;
@@ -220,8 +219,10 @@ int rsaes_oaep_encrypt(const void *msg, size_t mLen, const void *label,
     }
     DB[hlen + padding_size] = 1;
 
-    for (int i = 0; i < *mLen; i++) {
-        DB[hlen + padding_size + 1 + i] = m[i];
+    for (int i = 0; i < mLen; i++) {
+        const unsigned char *temp;
+        temp = &m[i];
+        DB[hlen + padding_size + 1 + i] = *temp;
     }
     // Generate a random octet string seed of length hlen. (step d)
     unsigned char *seed = (unsigned char *)malloc(hlen);
@@ -235,7 +236,7 @@ int rsaes_oaep_encrypt(const void *msg, size_t mLen, const void *label,
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
     // MGF(seed, hlen, dbMask, dbMaskLen);
-    dbMask = MGF(seed, DBlength, sha2_ndx);
+    MGF(seed, DBlength, dbMask, sha2_ndx);
 
     unsigned char *maskedDB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
@@ -246,20 +247,20 @@ int rsaes_oaep_encrypt(const void *msg, size_t mLen, const void *label,
     // Let seedMask = MGF(maskedDB, hlen)(step g)
     unsigned char *seedMask =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    seedMask = MGF(maskedDB, hlen, sha2_ndx);
+    MGF(maskedDB, hlen, seedMask, sha2_ndx);
 
     unsigned char *maskedSeed =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
     for (int i = 0; i < hlen; i++) {
         maskedSeed[i] = seedMask[i] ^ seed[i];
     }
+
     for (int i = 0; i < hlen; i++) {
-        c[i + 1] = maskedSeed[i];
+        memcpy(&c[i + 1], &maskedSeed[i], sizeof(unsigned char));
     }
     for (int i = 0; i < DBlength; i++) {
-        c[i + 1 + hlen] = maskedDB[i];
+        memcpy(&c[i + 1 + hlen], &maskedDB[i], sizeof(unsigned char));
     }
-    if (c[0] != 0) return PKCS_INITIAL_NONZERO;
     free(seedMask);
     free(dbMask);
     free(maskedDB);
@@ -283,7 +284,9 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
 
     unsigned char *all = (unsigned char *)malloc(k * sizeof(unsigned char));
     for (int i = 0; i < k; i++) {
-        all[i] = (unsigned char)c[i];
+        const unsigned char *temp;
+        temp = (const unsigned char *)c + i;
+        all[i] = *temp;
     }
     if ((ret = rsa_cipher(all, d, n)) != 0) return ret;
     if (all[0] != 0) return PKCS_INITIAL_NONZERO;
@@ -302,7 +305,7 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
 
     unsigned char *seedMask =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    seedMask = MGF(maskedDB, hlen, sha2_ndx);
+    MGF(maskedDB, hlen, seedMask, sha2_ndx);
     unsigned char *seed = (unsigned char *)malloc(hlen * sizeof(unsigned char));
     for (int i = 0; i < hlen; i++) {
         seed[i] = seedMask[i] ^ maskedSeed[i];
@@ -311,7 +314,7 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     free(maskedSeed);
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
-    dbMask = MGF(seed, DBlength, sha2_ndx);
+    MGF(seed, DBlength, dbMask, sha2_ndx);
     unsigned char *DB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
     for (int i = 0; i < DBlength; i++) {
@@ -336,7 +339,7 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     while (DB[pos] == 0) pos++;
     if (pos != DBlength - *mLen - 1 || DB[pos] != 1) return PKCS_INVALID_PS;
     for (int i = 0; i < *mLen; i++) {
-        m[i] = DB[DBlength - *mLen + i];
+        memcpy(&m[i], &DB[DBlength - *mLen + i], sizeof(char));
     }
     free(lHash);
     free(DB);
@@ -349,56 +352,8 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
  * s의 크기는 RSAKEYSIZE와 같아야 한다. 성공하면 0, 그렇지 않으면 오류 코드를
  * 넘겨준다.
  */
-iint rsassa_pss_sign(const void *msg, size_t len, const void *d, const void *n,
-                     void *sig, int sha2_ndx) {
-    int k = RSAKEYSIZE / 8;
-    int hlen = findSHA[sha2_ndx];
-    int padding1_size = 8;
-    int sLen = mLen - hlen - 8;
-    int emLen = int psLen = emLen - sLen - hlen - 2;
-
-    if (mLen > k - 2 * hlen - 2) {
-        return PKCS_MSG_TOO_LONG;
-    }
-    //
-    unsigned char *M = (unsigned char *)malloc(mLen * sizeof(unsigned char));
-    for (int i = 0; i < padding1_size; i++) {
-        M[i] = 0;
-    }
-
-    unsigned char *mHash1 =
-        (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    for (int i = 0; i < hlen; i++) {
-        hash(m, strlen(m), mHash1[i], sha2_ndx);
-        M[i + 8] = mHash1[i];
-    }
-    free(mHash1);
-
-    // Generate a random octet string salt of length saltLen.
-    unsigned char *salt = (unsigned char *)malloc(sLen);
-    for (int i = 0; i < sLen; i++) {
-        uint8_t random_byte =
-            (uint8_t)arc4random_uniform(256);  // generate random byte (0-255)
-        salt[i] = random_byte;
-        M[i + hlen + 8] = salt[i];
-    }
-    free(salt);
-
-    // Let mHash2 = Hash(M), an octet string of length hlen
-    unsigned char *mHash2 =
-        (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    for (int i = 0; i < hlen; i++) {
-        hash(M, strlen(M), mHash2[i], sha2_ndx);
-    }
-
-    // Let H = Hash(M), an octet string of length hlen
-    unsigned char *H = (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    for (int i = 0; i < hlen; i++) {
-        H[i] = mHash2[i];
-    }
-
-    // Set DB = padding2 + salt
-}
+int rsassa_pss_sign(const void *msg, size_t mLen, const void *d, const void *n,
+                    void *sig, int sha2_ndx) {}
 
 /*
  * rsassa_pss_verify - RSA Signature Scheme with Appendix
