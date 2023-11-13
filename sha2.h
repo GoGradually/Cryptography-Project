@@ -36,20 +36,20 @@
 #ifndef SHA2_H
 #define SHA2_H
 
-#define SHA224_DIGEST_SIZE ( 224 / 8)
-#define SHA256_DIGEST_SIZE ( 256 / 8)
-#define SHA384_DIGEST_SIZE ( 384 / 8)
-#define SHA512_DIGEST_SIZE ( 512 / 8)
+#define SHA224_DIGEST_SIZE (224 / 8)  // 28
+#define SHA256_DIGEST_SIZE (256 / 8)  // 32
+#define SHA384_DIGEST_SIZE (384 / 8)  // 48
+#define SHA512_DIGEST_SIZE (512 / 8)  // 64
 
-#define SHA256_BLOCK_SIZE  ( 512 / 8)
-#define SHA512_BLOCK_SIZE  (1024 / 8)
-#define SHA384_BLOCK_SIZE  SHA512_BLOCK_SIZE
-#define SHA224_BLOCK_SIZE  SHA256_BLOCK_SIZE
+#define SHA256_BLOCK_SIZE (512 / 8)
+#define SHA512_BLOCK_SIZE (1024 / 8)
+#define SHA384_BLOCK_SIZE SHA512_BLOCK_SIZE
+#define SHA224_BLOCK_SIZE SHA256_BLOCK_SIZE
 
 #ifndef SHA2_TYPES
 #define SHA2_TYPES
 typedef unsigned char uint8;
-typedef unsigned int  uint32;
+typedef unsigned int uint32;
 typedef unsigned long long uint64;
 #endif
 
@@ -81,7 +81,7 @@ void sha224_final(sha224_ctx *ctx, unsigned char *digest);
 void sha224(const unsigned char *message, unsigned int len,
             unsigned char *digest);
 
-void sha256_init(sha256_ctx * ctx);
+void sha256_init(sha256_ctx *ctx);
 void sha256_update(sha256_ctx *ctx, const unsigned char *message,
                    unsigned int len);
 void sha256_final(sha256_ctx *ctx, unsigned char *digest);
@@ -106,9 +106,9 @@ void sha512_256_final(sha512_ctx *ctx, unsigned char *digest);
 void sha512(const unsigned char *message, unsigned int len,
             unsigned char *digest);
 void sha512_224(const unsigned char *message, unsigned int len,
-            unsigned char *digest);
+                unsigned char *digest);
 void sha512_256(const unsigned char *message, unsigned int len,
-            unsigned char *digest);
+                unsigned char *digest);
 
 #ifdef __cplusplus
 }
