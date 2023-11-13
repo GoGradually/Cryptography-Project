@@ -23,7 +23,7 @@ typedef void (*HashFunction)(const unsigned char *, unsigned int,
 HashFunction sha2_functions[] = {sha224, sha256,     sha384,
                                  sha512, sha512_224, sha512_256};
 int findSHA[] = {SHA224_DIGEST_SIZE, SHA256_DIGEST_SIZE, SHA384_DIGEST_SIZE,
-                 SHA512_DIGEST_SIZE, SHA512_DIGEST_SIZE, SHA512_DIGEST_SIZE};
+                 SHA512_DIGEST_SIZE, SHA224_DIGEST_SIZE, SHA256_DIGEST_SIZE};
 
 /*
  * rsa_generate_key() - generates RSA keys e, d and n in octet strings.
@@ -161,14 +161,33 @@ void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
     if (l > (hlen << 32)) return;
     unsigned long max = l / hlen;
     if (l % hlen) max++;
-    for (unsigned long i = 0; i < max && strlen(dest) < l; i++) {
-        unsigned char *C = (unsigned char *)malloc(strlen(mgfSeed) + 4);
-        strcat(C, mgfSeed);
-        strcat(C, I2OSP(i, 4));
+    int now = 0;
+    for (unsigned long i = 0; i < max && now < l; i++) {
+        int start = 0;
+        int i = 0;
+
+        while (mgfSeed[i] != '\0') i++;
+        unsigned char *C = (unsigned char *)malloc(i + 4);
+
+        for (i = 0; mgfSeed[i] != '\0'; i++) {
+            C[i + start] = mgfSeed[i];
+        }
+        start += i;
+        unsigned char *os = I2OSP(i, 4);
+        for (i = 0; os[i] != '\0'; i++) {
+            C[i + start] = os[i];
+        }
+        start += i;
+
         unsigned char *val =
             (unsigned char *)malloc(hlen * sizeof(unsigned char));
-        hash(C, strlen(C), val, sha2_ndx);
-        strcat(dest, val);
+        hash(C, start, val, sha2_ndx);
+
+        for (i = 0; val[i] != '\0'; i++) {
+            dest[i + now] = val[i];
+        }
+        now += i;
+        free(os);
         free(C);
         free(val);
     }
@@ -278,7 +297,7 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
  */
 int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
                        const void *n, const void *c, int sha2_ndx) {
-    int ret;
+    int ret = 0;
     int k = RSAKEYSIZE / 8;        // RSA modulus size in bytes
     int hlen = findSHA[sha2_ndx];  // Length of the hash function output
 
