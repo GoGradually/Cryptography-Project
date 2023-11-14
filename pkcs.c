@@ -159,7 +159,6 @@ unsigned char *I2OSP(unsigned long x, int xLen) {
 }
 
 // l = 출력 길이
-//
 void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
          int sha2_ndx) {
     unsigned long hlen = findSHA[sha2_ndx];
@@ -172,6 +171,8 @@ void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
     for (unsigned long i = 0; i < max && now < l; i++) {
         unsigned char *C = (unsigned char *)malloc(seedLen + 4);
         unsigned char *os = I2OSP(i, 4);
+        memcpy(C, mgfSeed, seedLen);
+
         for (int j = 0; j < 4 && j + now < l; j++) {
             C[seedLen + j] = os[j];
         }
@@ -236,7 +237,6 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     // int dbMaskLen = k - hlen - 1;
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
-    // MGF(seed, hlen, dbMask, dbMaskLen);
     MGF(seed, DBlength, dbMask, sha2_ndx);
 
     unsigned char *maskedDB =
@@ -263,7 +263,6 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     start += hlen;
     memcpy(tmp + start, maskedDB, DBlength);
     start += DBlength;
-
     rsa_cipher(c, e, n);
 
     free(seedMask);
@@ -292,6 +291,7 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
         all[i] = *temp;
     }
     rsa_cipher(all, d, n);
+
     if (all[0] != 0) return PKCS_INITIAL_NONZERO;
     unsigned char *maskedSeed =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
