@@ -171,7 +171,9 @@ void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
     for (unsigned long i = 0; i < max && now < l; i++) {
         unsigned char *C = (unsigned char *)malloc(seedLen + 4);
         unsigned char *os = I2OSP(i, 4);
-        memcpy(C, mgfSeed, seedLen);
+        for (int i = 0; i < seedLen; i++) {
+            C[i] = mgfSeed[i];
+        }
 
         for (int j = 0; j < 4 && j + now < l; j++) {
             C[seedLen + j] = os[j];
@@ -179,7 +181,9 @@ void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
 
         unsigned char *val = (unsigned char *)malloc(hlen);
         hash(C, seedLen + 4, val, sha2_ndx);
-        memcpy(dest + now, val, hlen);
+        for (int i = 0; i < hlen; i++) {
+            dest[i + now] = val[i];
+        }
         now += hlen;
         free(os);
         free(C);
@@ -221,8 +225,14 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     unsigned char *DB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
 
-    memcpy(DB, lHash, hlen);
-    memcpy(DB + hlen + padding_size + 1, m, mLen);
+    for (int i = 0; i < hlen; i++) {
+        DB[i] = lHash[i];
+    }
+    unsigned char *message = (unsigned char *)m;
+    for (int i = 0; i < mLen; i++) {
+        DB[i + hlen + padding_size + 1] = message[i];
+    }
+
     DB[hlen + padding_size] = 1;
 
     // Generate a random octet string seed of length hlen. (step d)
@@ -259,9 +269,14 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     unsigned char *tmp = (unsigned char *)c;
     tmp[0] = 0;
     int start = 1;
-    memcpy(tmp + start, maskedSeed, hlen);
+    for (int i = 0; i < hlen; i++) {
+        tmp[start + i] = maskedSeed[i];
+    }
     start += hlen;
-    memcpy(tmp + start, maskedDB, DBlength);
+    for (int i = 0; i < DBlength; i++) {
+        tmp[start + i] = maskedDB[i];
+    }
+
     start += DBlength;
     rsa_cipher(c, e, n);
 
@@ -296,7 +311,10 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     unsigned char *maskedSeed =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
 
-    memcpy(maskedSeed, all + 1, hlen);
+    for (int i = 0; i < hlen; i++) {
+        maskedSeed[i] = all[i + 1];
+    }
+
     int DBlength = k - hlen - 1;
     unsigned char *maskedDB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
@@ -347,8 +365,9 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     if (*mLen > k - 2 * hlen - 2) {
         return PKCS_MSG_TOO_LONG;
     }
+    unsigned char *dest = (unsigned char *)m;
     for (int i = 0; i < *mLen; i++) {
-        memcpy(&m[i], &DB[DBlength - *mLen + i], sizeof(char));
+        dest[i] = DB[DBlength - *mLen + i];
     }
     free(lHash);
     free(DB);
