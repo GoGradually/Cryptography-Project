@@ -186,9 +186,8 @@ int main(void) {
 
     ////////////////////
     rsaes_oaep_encrypt("sample", 7, "", e, n, c, SHA224);
-
+    return 0;
     ////////////////////
-
     /*
      * <기본 암복호화 시험>
      * 문자열 "sample data"를 암복호화한다. 널문자를 포함하여 길이가
