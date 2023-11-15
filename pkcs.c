@@ -168,23 +168,24 @@ void MGF(unsigned char *mgfSeed, unsigned int l, unsigned char *dest,
     int now = 0;
     int seedLen = hlen;
 
-    for (unsigned long i = 0; i < max && now < l; i++) {
+    for (unsigned long i = 0; i < max - 1 && now < l; i++) {
         unsigned char *C = (unsigned char *)malloc(seedLen + 4);
         unsigned char *os = I2OSP(i, 4);
-        for (int i = 0; i < seedLen; i++) {
-            C[i] = mgfSeed[i];
+        int j;
+        for (j = 0; j < seedLen; j++) {
+            C[j] = mgfSeed[j];
         }
 
-        for (int j = 0; j < 4 && j + now < l; j++) {
+        for (j = 0; j < 4 && j < l; j++) {
             C[seedLen + j] = os[j];
         }
 
         unsigned char *val = (unsigned char *)malloc(hlen);
         hash(C, seedLen + 4, val, sha2_ndx);
-        for (int i = 0; i < hlen; i++) {
-            dest[i + now] = val[i];
+        for (j = 0; j < hlen && j + now < l; j++) {
+            dest[j + now] = val[j];
         }
-        now += hlen;
+        now += j;
         free(os);
         free(C);
         free(val);
@@ -210,11 +211,16 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
         return PKCS_MSG_TOO_LONG;
     }
     // Let lHash = Hash(L), an octet string of length hlen (step 2 - a)
-    //////////////////////////////////////////////////////////
     unsigned char *lHash =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
     hash(label, strlen(label), lHash, sha2_ndx);
 
+    //////////////////////////////////////////////////////////
+    printf("hash check\n");
+    for (int i = 0; i < hlen; i++) {
+        printf("%02hhx", lHash[i]);
+    }
+    printf("\n");
     /////////////////////////////////////////////////////////
 
     // Generate a padding string PS (step 2 - b)
@@ -237,29 +243,66 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
 
     // Generate a random octet string seed of length hlen. (step d)
     unsigned char *seed = (unsigned char *)malloc(hlen);
-    for (int i = 0; i < hlen; i++) {
-        uint8_t random_byte =
-            (uint8_t)arc4random_uniform(256);  // generate random byte (0-255)
-        seed[i] = random_byte;
-    }
+    // for (int i = 0; i < hlen; i++) {
+    //     uint8_t random_byte =
+    //         (uint8_t)arc4random_uniform(256);  // generate random byte
+    //         (0-255)
+    //     seed[i] = random_byte;
+    // }
 
     // Let dbMask = MGF(seed, k - hlen - 1) (step e)
     // int dbMaskLen = k - hlen - 1;
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
+    /////////////////////////////////////
+    printf("Seed setting\n");
+    char temp[] = "2010ff31602cf33341383ee7b263583623a0ce5671df22b25013c642";
+    for (int i = 0; i < hlen; i++) {
+        if (temp[2 * i] >= '0' && temp[2 * i] <= '9')
+            seed[i] = temp[2 * i] - '0';
+        else
+            seed[i] = temp[2 * i] - 'a' + 10;
+        seed[i] <<= 4;
+        if (temp[2 * i + 1] >= '0' && temp[2 * i + 1] <= '9')
+            seed[i] += temp[2 * i + 1] - '0';
+        else
+            seed[i] += temp[2 * i + 1] - 'a' + 10;
+        printf("%02hhx", seed[i]);
+    }
+    printf("\n");
+
+    printf("MGF check\n");
     MGF(seed, DBlength, dbMask, sha2_ndx);
+
+    for (int i = 0; i < DBlength; i++) {
+        printf("%02hhx", dbMask[i]);
+    }
+    printf("\n");
+    /////////////////////////////////////
+
+    // MGF(seed, DBlength, dbMask, sha2_ndx);
 
     unsigned char *maskedDB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
     for (int i = 0; i < DBlength; i++) {
         maskedDB[i] = dbMask[i] ^ DB[i];
+        //////////
+        printf("%02hhx xor %02hhx = %02hhx\n", dbMask[i], DB[i], maskedDB[i]);
+        //////////
     }
 
     // Let seedMask = MGF(maskedDB, hlen)(step g)
     unsigned char *seedMask =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
+    // MGF(maskedDB, hlen, seedMask, sha2_ndx);
+    //////////////////////////////////////////////////////////////////////////////////
+    printf("MGF2 check\n");
     MGF(maskedDB, hlen, seedMask, sha2_ndx);
-
+    for (int i = 0; i < hlen; i++) {
+        printf("%02hhx", seedMask[i]);
+    }
+    printf("\n");
+    //////////////////////////////////////////////////////////////////////////////////
     unsigned char *maskedSeed =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
 
@@ -319,7 +362,9 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     unsigned char *maskedDB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
 
-    memcpy(maskedDB, all + 1 + hlen, DBlength);
+    for (int i = 0; i < DBlength; i++) {
+        maskedDB[i] = all[i + 1 + hlen];
+    }
     free(all);
 
     unsigned char *seedMask =
@@ -347,21 +392,14 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
     hash(label, strlen(label), lHash, sha2_ndx);
 
-    /////////////////////////////////////
-    for (int i = 0; i < DBlength; i++) {
-        printf("%d, %02hhx\n", i, DB[i]);
-    }
-    printf("\n");
-    ///////////////////////
-    int pos = hlen;
-    while (DB[pos] == 0) pos++;
-    *mLen = DBlength - pos - 1;
-    printf("%d\n", *mLen);
-    if (DB[pos] != 0x01) return PKCS_INVALID_PS;
-
     for (int i = 0; i < hlen; i++) {
         if (lHash[i] != DB[i]) return PKCS_HASH_MISMATCH;
     }
+    int pos = hlen;
+    while (DB[pos] == 0) pos++;
+    *mLen = DBlength - pos - 1;
+    if (DB[pos] != 0x01) return PKCS_INVALID_PS;
+
     if (*mLen > k - 2 * hlen - 2) {
         return PKCS_MSG_TOO_LONG;
     }
