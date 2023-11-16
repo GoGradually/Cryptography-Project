@@ -361,14 +361,6 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     free(DB);
     return 0;
 }
-// k = signers rsa priv/key m message to be signed,an octet string
-// output should be message too long,encoding error
-static void sha_gen(int sha2_ndx, const unsigned char *message,
-                    unsigned int len, unsigned char *digest) {
-    void (*f[6])(const unsigned char *, unsigned int, unsigned char *) = {
-        sha224, sha256, sha384, sha512, sha512_224, sha512_256};
-    if (sha2_ndx >= 0 && sha2_ndx <= 5) f[sha2_ndx](message, len, digest);
-}
 /*
  * rsassa_pss_sign - RSA Signature Scheme with Appendix
  * 길이가 len 바이트인 메시지 m을 개인키 (d,n)으로 서명한 결과를 s에 저장한다.
@@ -385,11 +377,11 @@ int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
     int PS_LEN = DB_LEN - hlen;
     if (mLen > 0x1fffffffffffffff) return PKCS_MSG_TOO_LONG;
 
-    unsigned char mHash[hlen / 8];
+    unsigned char mHash[hlen];
     unsigned char mgf_Hash[DB_LEN];
-    unsigned char MPrime[2 * (hlen / 8) + 8];
-    unsigned char salt[hlen / 8];
-    unsigned char H[hlen / 8];
+    unsigned char MPrime[2 * (hlen) + 8];
+    unsigned char salt[hlen];
+    unsigned char H[hlen];
     unsigned char DB[DB_LEN];
     unsigned char EM[RSAKEYSIZE / 8];
 
@@ -397,33 +389,33 @@ int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
     hash(m, mLen, mHash, sha2_ndx);
 
     // salt를 random number로 채움
-    for (int i = 0; i < hlen / 8; i++) {
+    for (int i = 0; i < hlen; i++) {
         salt[i] = arc4random() & 255;
     }
 
     // MPrime의 처음 8 bytes는 0x00로 채우고 이후 mHash, salt를 이어붙임
     memset(MPrime, 0x00, 8);
-    memcpy(MPrime + 8, mHash, hlen / 8);
-    memcpy(MPrime + 8 + hlen / 8, salt, hlen / 8);
+    memcpy(MPrime + 8, mHash, hlen);
+    memcpy(MPrime + 8 + hlen, salt, hlen);
 
     // MPrime을 hash하여 H 획득
-    hash(MPrime, 2 * (hlen / 8), H, sha2_ndx);
+    hash(MPrime, 2 * (hlen) + 8, H, sha2_ndx);
     // hash H의 길이가 너무 커서 EM에 넣을 수 없는 경우 PKCS_HASH_TOO_LONG
     // return
     if ((sizeof(H) / sizeof(H[0]) > RSAKEYSIZE / 2)) return PKCS_HASH_TOO_LONG;
 
     // DB를 제외한 나머지 EM의 요소를 채움
-    memcpy(EM + DB_LEN, H, hlen / 8);
-    memset(EM + DB_LEN + hlen / 8, 0xbc, 1);
+    memcpy(EM + DB_LEN, H, hlen);
+    memset(EM + DB_LEN + hlen, 0xbc, 1);
 
     // DB 구성, 0으로 계속 padding하다가 salt 바로 앞 bit를 1로 설정하여 salt
     // 구분
     memset(DB, 0x00, PS_LEN - 1);
     memset(DB + PS_LEN - 1, 0x01, 1);
-    memcpy(DB + PS_LEN, salt, hlen / 8);
+    memcpy(DB + PS_LEN, salt, hlen);
 
     // mgf로 mgf_Hash 생성
-    MGF(H, hlen / 8, mgf_Hash, DB_LEN, sha2_ndx);
+    MGF(H, hlen, mgf_Hash, DB_LEN, sha2_ndx);
 
     // DB와 mgf_Hash를 XOR하여 EM 구성
     for (int i = 0; i < DB_LEN; i++) {
@@ -457,11 +449,11 @@ int rsassa_pss_verify(const void *m, size_t mLen, const void *e, const void *n,
     unsigned char maskedDB[DB_LEN];
     unsigned char DB[DB_LEN];
     unsigned char mgf_Hash[DB_LEN];
-    unsigned char H[hlen / 8];
-    unsigned char salt[hlen / 8];
-    unsigned char mHash[hlen / 8];
-    unsigned char HPrime[hlen / 8];
-    unsigned char MPrime[2 * (hlen / 8) + 8];
+    unsigned char H[hlen];
+    unsigned char salt[hlen];
+    unsigned char mHash[hlen];
+    unsigned char HPrime[hlen];
+    unsigned char MPrime[2 * (hlen) + 8];
 
     // s를 EM에 복사
     memcpy(EM, s, RSAKEYSIZE / 8);
@@ -479,10 +471,10 @@ int rsassa_pss_verify(const void *m, size_t mLen, const void *e, const void *n,
 
     // EM에서 maskedDB, H를 추출
     memcpy(maskedDB, EM, DB_LEN);
-    memcpy(H, EM + DB_LEN, hlen / 8);
+    memcpy(H, EM + DB_LEN, hlen);
 
     // mgf로 mgf_Hash 복구
-    MGF(H, hlen / 8, mgf_Hash, DB_LEN, sha2_ndx);
+    MGF(H, hlen, mgf_Hash, DB_LEN, sha2_ndx);
 
     // DB의 첫 byte를 항상 0으로 설정
     DB[0] = 0x00;
@@ -500,22 +492,22 @@ int rsassa_pss_verify(const void *m, size_t mLen, const void *e, const void *n,
     if (DB[PS_LEN - 1] != 0x01) return PKCS_INVALID_PD2;
 
     // DB로부터 salt 추출
-    memcpy(salt, DB + PS_LEN, hlen / 8);
+    memcpy(salt, DB + PS_LEN, hlen);
 
     // m을 hash하여 mHash 획득
     hash(m, mLen, mHash, sha2_ndx);
 
     // MPrime의 첫 8 bytes는 0, 그 이후 mHash, salt를 이어붙임
     memset(MPrime, 0x00, 8);
-    memcpy(MPrime + 8, mHash, hlen / 8);
-    memcpy(MPrime + 8 + hlen / 8, salt, hlen / 8);
+    memcpy(MPrime + 8, mHash, hlen);
+    memcpy(MPrime + 8 + hlen, salt, hlen);
 
     // MPrime을 hash하여 HPrime 획득
-    hash(MPrime, 2 * (hlen / 8) + 8, HPrime, sha2_ndx);
+    hash(MPrime, 2 * (hlen) + 8, HPrime, sha2_ndx);
 
     // H와 HPrime의 일치여부 확인
     // 일치하지 않는다면 PKCS_HASH_MISMATCH return
-    if (memcmp(H, HPrime, hlen / 8) != 0) return PKCS_HASH_MISMATCH;
+    if (memcmp(H, HPrime, hlen) != 0) return PKCS_HASH_MISMATCH;
 
     return 0;
 }
