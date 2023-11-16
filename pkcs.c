@@ -392,7 +392,7 @@ int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
     unsigned char EM[bytesize];
     uint8_t salt[hlen];
 
-    sha_gen(sha2_ndx, (unsigned char *)m, mLen, M_hash);
+    hash(m, mLen, M_hash, sha2_ndx);
 
     arc4random_buf(&salt, sizeof(uint8_t) * hlen);
 
@@ -400,7 +400,7 @@ int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
     memset(M_prime, 0x00, sizeof(char) * 8);
     memcpy(M_prime + sizeof(char) * 8, M_hash, sizeof(char) * hlen);
     memcpy(M_prime + sizeof(char) * (8 + hlen), salt, sizeof(char) * hlen);
-    sha_gen(sha2_ndx, M_prime, sizeof(M_prime), H);
+    hash(M_prime, sizeof(M_prime), H, sha2_ndx);
 
     // MGF(H, hlen, MGF, DB_len, sha2_ndx);
 
