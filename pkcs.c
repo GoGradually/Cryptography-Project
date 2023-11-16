@@ -202,10 +202,10 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
                        const void *e, const void *n, void *c, int sha2_ndx) {
     int k = RSAKEYSIZE / 8;        // RSA modulus size in bytes
     int hlen = findSHA[sha2_ndx];  // Length of the hash function output
-
+    int MLen = (int)mLen;
     // check to label length (step 1 - a)
     // message length is too long (step 1 - b)
-    if (mLen > k - 2 * hlen - 2) {
+    if (MLen > k - 2 * hlen - 2) {
         return PKCS_MSG_TOO_LONG;
     }
     // Let lHash = Hash(L), an octet string of length hlen (step 2 - a)
@@ -213,16 +213,8 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
     hash(label, strlen(label), lHash, sha2_ndx);
 
-    //////////////////////////////////////////////////////////+
-    printf("hash check\n");
-    for (int i = 0; i < hlen; i++) {
-        printf("%02hhx", lHash[i]);
-    }
-    printf("\n");
-    /////////////////////////////////////////////////////////-
-
     // Generate a padding string PS (step 2 - b)
-    int padding_size = k - mLen - 2 * hlen - 2;
+    int padding_size = k - MLen - 2 * hlen - 2;
 
     // a data block DB of length k - hlen - 1 octets (step c)
     int DBlength = k - hlen - 1;
@@ -233,58 +225,25 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
         DB[i] = lHash[i];
     }
     unsigned char *message = (unsigned char *)m;
-    for (int i = 0; i < mLen; i++) {
+    for (int i = 0; i < MLen; i++) {
         DB[i + hlen + padding_size + 1] = message[i];
     }
 
     DB[hlen + padding_size] = 1;
-    /////////////////////////////////////////////////////////////////////////+
-    printf("DB state\n");
-    for (int i = 0; i < DBlength; i++) {
-        printf("%02hhx", DB[i]);
-    }
-    printf("\n");
-    ////////////////////////////////////////////////////////////////////////-
     // Generate a random octet string seed of length hlen. (step d)
     unsigned char *seed = (unsigned char *)malloc(hlen);
-    // for (int i = 0; i < hlen; i++) {
-    //     uint8_t random_byte =
-    //         (uint8_t)arc4random_uniform(256);  // generate random byte
-    //         (0-255)
-    //     seed[i] = random_byte;
-    // }
+    for (int i = 0; i < hlen; i++) {
+        uint8_t random_byte =
+            (uint8_t)arc4random_uniform(256);  // generate random byte
+        seed[i] = random_byte;
+    }
 
     // Let dbMask = MGF(seed, k - hlen - 1) (step e)
-    // int dbMaskLen = k - hlen - 1;
+    int dbMaskLen = k - hlen - 1;
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
-    ///////////////////////////////////////////////////////////////////////////////+
-    printf("Seed setting\n");
-    char temp[] = "2010ff31602cf33341383ee7b263583623a0ce5671df22b25013c642";
-    for (int i = 0; i < hlen; i++) {
-        if (temp[2 * i] >= '0' && temp[2 * i] <= '9')
-            seed[i] = temp[2 * i] - '0';
-        else
-            seed[i] = temp[2 * i] - 'a' + 10;
-        seed[i] <<= 4;
-        if (temp[2 * i + 1] >= '0' && temp[2 * i + 1] <= '9')
-            seed[i] += temp[2 * i + 1] - '0';
-        else
-            seed[i] += temp[2 * i + 1] - 'a' + 10;
-        printf("%02hhx", seed[i]);
-    }
-    printf("\n");
 
-    printf("MGF check\n");
     MGF(seed, hlen, dbMask, DBlength, sha2_ndx);
-
-    for (int i = 0; i < DBlength; i++) {
-        printf("%02hhx", dbMask[i]);
-    }
-    printf("\n");
-    //////////////////////////////////////////////////////////////////////////////-
-
-    // MGF(seed, hlen, dbMask, DBlength,sha2_ndx);
 
     unsigned char *maskedDB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
@@ -292,25 +251,10 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
         maskedDB[i] = dbMask[i] ^ DB[i];
     }
 
-    ///////////////////////////////////////////////////////////////////////////////+
-    printf("MaskedDB test\n");
-    for (int i = 0; i < DBlength; i++) {
-        printf("%02hhx", maskedDB[i]);
-    }
-    printf("\n");
-    //////////////////////////////////////////////////////////////////////////////-
     // Let seedMask = MGF(maskedDB, hlen)(step g)
     unsigned char *seedMask =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    // MGF(maskedDB,DBlength, seedMask, hlen, sha2_ndx);
-    //////////////////////////////////////////////////////////////////////////////////+
-    printf("MGF2 check\n");
     MGF(maskedDB, DBlength, seedMask, hlen, sha2_ndx);
-    for (int i = 0; i < hlen; i++) {
-        printf("%02hhx", seedMask[i]);
-    }
-    printf("\n");
-    //////////////////////////////////////////////////////////////////////////////////-
     unsigned char *maskedSeed =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
 
@@ -327,13 +271,6 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     for (int i = 0; i < DBlength; i++) {
         tmp[start + i] = maskedDB[i];
     }
-    ///////////////////////////////////////////////////////////////////////////////+
-    printf("EM check\n");
-    for (int i = 0; i < k; i++) {
-        printf("%02hhx", tmp[i]);
-    }
-    printf("\n");
-    ///////////////////////////////////////////////////////////////////////////////-
     start += DBlength;
     rsa_cipher(c, e, n);
 
@@ -425,29 +362,141 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     free(DB);
     return 0;
 }
-
+// k = signers rsa priv/key m message to be signed,an octet string
+// output should be message too long,encoding error
+static void sha_gen(int sha2_ndx, const unsigned char *message,
+                    unsigned int len, unsigned char *digest) {
+    void (*f[6])(const unsigned char *, unsigned int, unsigned char *) = {
+        sha224, sha256, sha384, sha512, sha512_224, sha512_256};
+    if (sha2_ndx >= 0 && sha2_ndx <= 5) f[sha2_ndx](message, len, digest);
+}
 /*
  * rsassa_pss_sign - RSA Signature Scheme with Appendix
- * 길이가 len 바이트인 메시지 m을 개인키 (d,n)으로 서명한 결과를 s에
- * 저장한다. s의 크기는 RSAKEYSIZE와 같아야 한다. 성공하면 0, 그렇지 않으면
- * 오류 코드를 넘겨준다.
+ * 길이가 len 바이트인 메시지 m을 개인키 (d,n)으로 서명한 결과를 s에 저장한다.
+ * s의 크기는 RSAKEYSIZE와 같아야 한다. 성공하면 0, 그렇지 않으면 오류 코드를
+ * 넘겨준다.
  */
-int rsassa_pss_sign(const void *msg, size_t mLen, const void *d, const void *n,
-                    void *sig, int sha2_ndx) {}
+int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
+                    void *s, int sha2_ndx) {
+    int bytesize = RSAKEYSIZE / 8;
+    int hlen = findSHA[sha2_ndx];
+    int DB_len = bytesize - hlen - 1;
+    int PS_len = DB_len - hlen;
 
+    unsigned char M_hash[hlen];
+    unsigned char M_prime[8 + 2 * hlen];
+    unsigned char H[hlen];
+    unsigned char DB[DB_len];
+    unsigned char MGF[DB_len];
+    unsigned char MDB[DB_len];
+    unsigned char EM[bytesize];
+    uint8_t salt[hlen];
+
+    sha_gen(sha2_ndx, (unsigned char *)m, mLen, M_hash);
+
+    arc4random_buf(&salt, sizeof(uint8_t) * hlen);
+
+    //  M_prime에 만들어진 요소들을 결합한다.
+    memset(M_prime, 0x00, sizeof(char) * 8);
+    memcpy(M_prime + sizeof(char) * 8, M_hash, sizeof(char) * hlen);
+    memcpy(M_prime + sizeof(char) * (8 + hlen), salt, sizeof(char) * hlen);
+    sha_gen(sha2_ndx, M_prime, sizeof(M_prime), H);
+
+    // MGF(H, hlen, MGF, DB_len, sha2_ndx);
+
+    memset(DB, 0x00, sizeof(char) * PS_len);
+    memset(DB + sizeof(char) * PS_len, 0x01, sizeof(char));
+    memcpy(DB + sizeof(char) * (PS_len + 1), salt, sizeof(char) * hlen);
+
+    for (int i = 0; i < DB_len; ++i) MDB[i] = DB[i] ^ MGF[i];
+    MDB[0] = 0x0;
+
+    memcpy(EM, MDB, DB_len);
+    memcpy(EM + sizeof(char) * DB_len, H, sizeof(char) * hlen);
+    memset(EM + sizeof(char) * (DB_len + hlen), 0xBC, sizeof(char));
+    //  rsa sign
+
+    int res = rsa_cipher(EM, d, n);
+    if (!res) memcpy(s, EM, sizeof(EM));
+    return res;
+}
 /*
  * rsassa_pss_verify - RSA Signature Scheme with Appendix
  * 길이가 len 바이트인 메시지 m에 대한 서명이 s가 맞는지 공개키 (e,n)으로
  * 검증한다. 성공하면 0, 그렇지 않으면 오류 코드를 넘겨준다.
  */
-int rsassa_pss_verify(const void *msg, size_t len, const void *e, const void *n,
-                      const void *sig, int sha2_ndx) {}
+int rsassa_pss_verify(const void *m, size_t mLen, const void *e, const void *n,
+                      const void *s, int sha2_ndx) {
+    int bytesize = RSAKEYSIZE / 8;
+    int hlen = findSHA[sha2_ndx];
+    int DB_len = bytesize - hlen - 1;
+    int PS_len = DB_len - hlen;
 
-/*
-질문 할 것
-1. 라벨의 최대 길이를 측정하는 방법 (2^125 계산) -> 사실상 2의 128승 길이는
-입력으로도 못들어돈다?.
-2. I2OSP 함수 MGF1 에 들어가있는데 복호화 시 사용방법
-3. 매개변수 수정 가능 여부
-4. char 데이터가 1바이트 단위 저장을 위한건지 아니면 문자열 저장을 위한건지
-*/
+    if (mLen != bytesize || bytesize != RSAKEYSIZE / 8) {
+        return 0;
+    }
+
+    mpz_t signature;
+    mpz_init(signature);
+    mpz_import(signature, bytesize, 1, 1, 0, 0, s);
+
+    mpz_t m_representative;
+    mpz_init(m_representative);
+    mpz_powm(m_representative, signature, *((mpz_t *)e), *((mpz_t *)n));
+
+    unsigned char EM[bytesize];
+    mpz_export(EM, NULL, 1, 1, 0, 0, m_representative);
+
+    if (EM[bytesize - 1] != 0xBC) {
+        return 0;
+    }
+
+    unsigned char maskedDB[DB_len];
+    unsigned char H[hlen];
+
+    memcpy(maskedDB, EM, DB_len);
+    memcpy(H, EM + DB_len, hlen);
+
+    unsigned char mask = 0xFF << (8 - 8 * bytesize + 8 * hlen);
+    if ((maskedDB[0] & mask) != 0) {
+        return 0;
+    }
+
+    unsigned char dbMask[DB_len];
+    MGF(H, hlen, dbMask, DB_len, sha2_ndx);
+
+    for (int i = 0; i < DB_len; i++) {
+        maskedDB[i] ^= dbMask[i];
+    }
+
+    maskedDB[0] &= ~mask;
+
+    for (int i = 0; i < PS_len; i++) {
+        if (maskedDB[i] != 0) {
+            return 0;
+        }
+    }
+    if (maskedDB[PS_len] != 0x01) {
+        return 0;
+    }
+
+    unsigned char salt[hlen];
+    memcpy(salt, maskedDB + PS_len + 1, hlen);
+
+    unsigned char M_prime[8 + hlen + hlen];
+    memset(M_prime, 0x00, 8);
+    memcpy(M_prime + 8, H, hlen);
+    memcpy(M_prime + 8 + hlen, salt, hlen);
+
+    unsigned char H_prime[hlen];
+    hash(M_prime, sizeof(M_prime), H_prime, sha2_ndx);
+
+    if (memcmp(H, H_prime, hlen) != 0) {
+        return 0;
+    }
+
+    mpz_clear(signature);
+    mpz_clear(m_representative);
+
+    return 1;
+}
