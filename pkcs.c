@@ -158,10 +158,10 @@ unsigned char *I2OSP(unsigned long x, int xLen) {
 
 // outputLength = 출력 바이트 길이 (글자 두개)
 // seedLength = 시드 입력 바이트 길이
-void MGF(unsigned char *mgfSeed, unsigned int seedLength, unsigned char *dest,
-         unsigned int outputLength, int sha2_ndx) {
+int MGF(unsigned char *mgfSeed, unsigned int seedLength, unsigned char *dest,
+        unsigned int outputLength, int sha2_ndx) {
     unsigned long hlen = findSHA[sha2_ndx];
-    if (outputLength > (hlen << 32)) return;
+    if (outputLength > (hlen << 32)) return PKCS_LABEL_TOO_LONG;
     unsigned long max = outputLength / hlen;
     if (outputLength % hlen) max++;
     int now = 0;
@@ -188,6 +188,7 @@ void MGF(unsigned char *mgfSeed, unsigned int seedLength, unsigned char *dest,
         free(C);
         free(val);
     }
+    return 0;
 }
 
 /*
@@ -208,7 +209,7 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     if (MLen > k - 2 * hlen - 2) {
         return PKCS_MSG_TOO_LONG;
     }
-    // Let lHash = Hash(L), an octet string of length hlen (step 2 - a)
+    // Let lHash = n_Hash(L), an octet string of length hlen (step 2 - a)
     unsigned char *lHash =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
     hash(label, strlen(label), lHash, sha2_ndx);
@@ -241,8 +242,10 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     // Let dbMask = MGF(seed, k - hlen - 1) (step e)
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
-
-    MGF(seed, hlen, dbMask, DBlength, sha2_ndx);
+    int tag = 0;
+    if ((tag = MGF(seed, hlen, dbMask, DBlength, sha2_ndx)) != 0) {
+        return tag;
+    }
 
     unsigned char *maskedDB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
@@ -253,7 +256,9 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
     // Let seedMask = MGF(maskedDB, hlen)(step g)
     unsigned char *seedMask =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    MGF(maskedDB, DBlength, seedMask, hlen, sha2_ndx);
+    if ((tag = MGF(maskedDB, DBlength, seedMask, hlen, sha2_ndx)) != 0) {
+        return tag;
+    }
     unsigned char *maskedSeed =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
 
@@ -271,6 +276,7 @@ int rsaes_oaep_encrypt(const void *m, size_t mLen, const void *label,
         tmp[start + i] = maskedDB[i];
     }
     start += DBlength;
+    if (tmp[0] != 0) return PKCS_INITIAL_NONZERO;
     rsa_cipher(c, e, n);
 
     free(seedMask);
@@ -319,7 +325,9 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
 
     unsigned char *seedMask =
         (unsigned char *)malloc(hlen * sizeof(unsigned char));
-    MGF(maskedDB, DBlength, seedMask, hlen, sha2_ndx);
+    int tag = 0;
+    if ((tag = MGF(maskedDB, DBlength, seedMask, hlen, sha2_ndx)) != 0)
+        return tag;
     unsigned char *seed = (unsigned char *)malloc(hlen * sizeof(unsigned char));
     for (int i = 0; i < hlen; i++) {
         seed[i] = seedMask[i] ^ maskedSeed[i];
@@ -328,7 +336,7 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
     free(maskedSeed);
     unsigned char *dbMask =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
-    MGF(seed, hlen, dbMask, DBlength, sha2_ndx);
+    if ((tag = MGF(seed, hlen, dbMask, DBlength, sha2_ndx)) != 0) return tag;
     unsigned char *DB =
         (unsigned char *)malloc(DBlength * sizeof(unsigned char));
     for (int i = 0; i < DBlength; i++) {
@@ -369,68 +377,51 @@ int rsaes_oaep_decrypt(void *m, size_t *mLen, const void *label, const void *d,
  */
 int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
                     void *s, int sha2_ndx) {
-    // SHA224, SHA256에서 hash function의 input이 너무 길면 PKCS_MSG_TOO_LONG
-    // return
-    int bytesize = RSAKEYSIZE / 8;
+    int k = RSAKEYSIZE / 8;
     int hlen = findSHA[sha2_ndx];
-    int DB_LEN = bytesize - hlen - 1;
+    int DB_LEN = k - hlen - 1;
     int PS_LEN = DB_LEN - hlen;
     if (mLen > 0x1fffffffffffffff) return PKCS_MSG_TOO_LONG;
 
     unsigned char mHash[hlen];
     unsigned char mgf_Hash[DB_LEN];
-    unsigned char MPrime[2 * (hlen) + 8];
+    unsigned char M_[2 * (hlen) + 8];
     unsigned char salt[hlen];
-    unsigned char H[hlen];
+    unsigned char n_Hash[hlen];
     unsigned char DB[DB_LEN];
     unsigned char EM[RSAKEYSIZE / 8];
 
-    // m을 hash하여 mHash 획득
     hash(m, mLen, mHash, sha2_ndx);
 
-    // salt를 random number로 채움
     for (int i = 0; i < hlen; i++) {
         salt[i] = arc4random() & 255;
     }
 
-    // MPrime의 처음 8 bytes는 0x00로 채우고 이후 mHash, salt를 이어붙임
-    memset(MPrime, 0x00, 8);
-    memcpy(MPrime + 8, mHash, hlen);
-    memcpy(MPrime + 8 + hlen, salt, hlen);
+    memset(M_, 0x00, 8);
+    memcpy(M_ + 8, mHash, hlen);
+    memcpy(M_ + 8 + hlen, salt, hlen);
 
-    // MPrime을 hash하여 H 획득
-    hash(MPrime, 2 * (hlen) + 8, H, sha2_ndx);
-    // hash H의 길이가 너무 커서 EM에 넣을 수 없는 경우 PKCS_HASH_TOO_LONG
-    // return
-    if ((sizeof(H) / sizeof(H[0]) > RSAKEYSIZE / 2)) return PKCS_HASH_TOO_LONG;
+    hash(M_, 2 * (hlen) + 8, n_Hash, sha2_ndx);
+    if ((sizeof(n_Hash) / sizeof(n_Hash[0]) > RSAKEYSIZE / 2))
+        return PKCS_HASH_TOO_LONG;
 
-    // DB를 제외한 나머지 EM의 요소를 채움
-    memcpy(EM + DB_LEN, H, hlen);
+    memcpy(EM + DB_LEN, n_Hash, hlen);
     memset(EM + DB_LEN + hlen, 0xbc, 1);
 
-    // DB 구성, 0으로 계속 padding하다가 salt 바로 앞 bit를 1로 설정하여 salt
-    // 구분
     memset(DB, 0x00, PS_LEN - 1);
     memset(DB + PS_LEN - 1, 0x01, 1);
     memcpy(DB + PS_LEN, salt, hlen);
+    int tag = 0;
+    if ((tag = MGF(n_Hash, hlen, mgf_Hash, DB_LEN, sha2_ndx)) != 0) return tag;
 
-    // mgf로 mgf_Hash 생성
-    MGF(H, hlen, mgf_Hash, DB_LEN, sha2_ndx);
-
-    // DB와 mgf_Hash를 XOR하여 EM 구성
     for (int i = 0; i < DB_LEN; i++) {
         EM[i] = DB[i] ^ mgf_Hash[i];
     }
 
-    // EM의 맨 처음 bit가 1일 시 0으로 변경
     if ((EM[0] >> 7) == 1) EM[0] &= 0x7f;
 
-    // EM을 (d, n)으로 서명
-    // 이때 RSA 데이터 값이 modulus n보다 크거나 같다면 PKCS_MSG_OUT_OF_RANGE
-    // return
     if (rsa_cipher(EM, d, n)) return PKCS_MSG_OUT_OF_RANGE;
 
-    // EM을 s에 복사
     memcpy(s, EM, RSAKEYSIZE / 8);
 
     return 0;
@@ -441,73 +432,56 @@ int rsassa_pss_sign(const void *m, size_t mLen, const void *d, const void *n,
  */
 int rsassa_pss_verify(const void *m, size_t mLen, const void *e, const void *n,
                       const void *s, int sha2_ndx) {
-    int bytesize = RSAKEYSIZE / 8;
+    int k = RSAKEYSIZE / 8;
     int hlen = findSHA[sha2_ndx];
-    int DB_LEN = bytesize - hlen - 1;
+    int DB_LEN = k - hlen - 1;
     int PS_LEN = DB_LEN - hlen;
-    unsigned char EM[RSAKEYSIZE / 8];
+    unsigned char EM[k];
     unsigned char maskedDB[DB_LEN];
     unsigned char DB[DB_LEN];
     unsigned char mgf_Hash[DB_LEN];
-    unsigned char H[hlen];
+    unsigned char n_Hash[hlen];
     unsigned char salt[hlen];
     unsigned char mHash[hlen];
-    unsigned char HPrime[hlen];
-    unsigned char MPrime[2 * (hlen) + 8];
+    unsigned char H_[hlen];
+    unsigned char M_[2 * (hlen) + 8];
 
-    // s를 EM에 복사
-    memcpy(EM, s, RSAKEYSIZE / 8);
+    memcpy(EM, s, k);
 
-    // EM을 (e, n)으로 검증
-    // 이때 RSA 데이터 값이 modulus n보다 크거나 같다면 PKCS_MSG_OUT_OF_RANGE
-    // return
     if (rsa_cipher(EM, e, n)) return PKCS_MSG_OUT_OF_RANGE;
 
-    // EM의 마지막 byte가 0xbc가 아니면 PKCS_INVALID_LAST return
-    if (EM[RSAKEYSIZE / 8 - 1] != 0xbc) return PKCS_INVALID_LAST;
+    if (EM[k - 1] != 0xbc) return PKCS_INVALID_LAST;
 
-    // EM의 첫 bit가 0이 아니면 PKCS_INVALID_INIT return
     if ((EM[0] >> 7) != 0) return PKCS_INVALID_INIT;
 
-    // EM에서 maskedDB, H를 추출
     memcpy(maskedDB, EM, DB_LEN);
-    memcpy(H, EM + DB_LEN, hlen);
+    memcpy(n_Hash, EM + DB_LEN, hlen);
+    int tag = 0;
+    if ((tag = MGF(n_Hash, hlen, mgf_Hash, DB_LEN, sha2_ndx)) != 0) return tag;
 
-    // mgf로 mgf_Hash 복구
-    MGF(H, hlen, mgf_Hash, DB_LEN, sha2_ndx);
-
-    // DB의 첫 byte를 항상 0으로 설정
     DB[0] = 0x00;
 
-    // maskedDB와 mgf_Hash를 XOR하여 DB 구성
     for (int i = 1; i < DB_LEN; i++) {
         DB[i] = maskedDB[i] ^ mgf_Hash[i];
     }
 
-    // DB의 pad가 0x000...01이 아니라면 PKCS_INVALID_PD2 return
     for (int i = 0; i < PS_LEN - 1; i++) {
         if ((DB[i] ^ 0x00) != 0) return PKCS_INVALID_PD2;
     }
 
     if (DB[PS_LEN - 1] != 0x01) return PKCS_INVALID_PD2;
 
-    // DB로부터 salt 추출
     memcpy(salt, DB + PS_LEN, hlen);
 
-    // m을 hash하여 mHash 획득
     hash(m, mLen, mHash, sha2_ndx);
 
-    // MPrime의 첫 8 bytes는 0, 그 이후 mHash, salt를 이어붙임
-    memset(MPrime, 0x00, 8);
-    memcpy(MPrime + 8, mHash, hlen);
-    memcpy(MPrime + 8 + hlen, salt, hlen);
+    memset(M_, 0x00, 8);
+    memcpy(M_ + 8, mHash, hlen);
+    memcpy(M_ + 8 + hlen, salt, hlen);
 
-    // MPrime을 hash하여 HPrime 획득
-    hash(MPrime, 2 * (hlen) + 8, HPrime, sha2_ndx);
+    hash(M_, 2 * (hlen) + 8, H_, sha2_ndx);
 
-    // H와 HPrime의 일치여부 확인
-    // 일치하지 않는다면 PKCS_HASH_MISMATCH return
-    if (memcmp(H, HPrime, hlen) != 0) return PKCS_HASH_MISMATCH;
+    if (memcmp(n_Hash, H_, hlen) != 0) return PKCS_HASH_MISMATCH;
 
     return 0;
 }
